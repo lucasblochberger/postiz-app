@@ -45,6 +45,11 @@ interface StoreState {
   locked: boolean;
   hide: boolean;
   setLocked: (locked: boolean) => void;
+  // Reasons a provider's settings forbid publishing right now, keyed by the
+  // provider (e.g. TikTok: disclosure on without a choice). Any entry disables
+  // the publish buttons and the first reason is shown on hover.
+  submitBlocks: Record<string, string>;
+  setSubmitBlock: (key: string, reason?: string) => void;
   integrations: Integrations[];
   selectedIntegrations: SelectedIntegrations[];
   global: Values[];
@@ -156,6 +161,7 @@ const initialState = {
   isCreateSet: false,
   current: 'global',
   locked: false,
+  submitBlocks: {} as Record<string, string>,
   hide: false,
   integrations: [] as Integrations[],
   selectedIntegrations: [] as SelectedIntegrations[],
@@ -533,6 +539,19 @@ export const useLaunchStore = create<StoreState>()((set) => ({
     set((state) => ({
       locked: locked,
     })),
+  setSubmitBlock: (key: string, reason?: string) =>
+    set((state) => {
+      if ((state.submitBlocks[key] || '') === (reason || '')) {
+        return {};
+      }
+      const submitBlocks = { ...state.submitBlocks };
+      if (reason) {
+        submitBlocks[key] = reason;
+      } else {
+        delete submitBlocks[key];
+      }
+      return { submitBlocks };
+    }),
   setHide: (hide: boolean) =>
     set((state) => ({
       hide: hide,

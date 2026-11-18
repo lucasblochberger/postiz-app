@@ -24,6 +24,7 @@ import { createReadStream } from 'fs';
 import { getSsrfSafeDispatcher } from '@gitroom/nestjs-libraries/dtos/webhooks/ssrf.safe.dispatcher';
 import { Integration } from '@prisma/client';
 import { Rules } from '@gitroom/nestjs-libraries/chat/rules.description.decorator';
+import { DashboardFunction } from '@gitroom/nestjs-libraries/integrations/dashboard.function.decorator';
 
 @Rules(
   [
@@ -31,6 +32,7 @@ import { Rules } from '@gitroom/nestjs-libraries/chat/rules.description.decorato
     'content_posting_method=DIRECT_POST publishes the post to the account. content_posting_method=UPLOAD does NOT publish: it only sends the media to the user inbox of the TikTok app, where the user must manually complete and publish it within 24 hours or it is discarded. Use DIRECT_POST unless the user explicitly asks to review or edit the post inside the TikTok app first.',
     'With content_posting_method=UPLOAD, TikTok ignores every setting except the title / post content. Never tell the user that video_made_with_ai, privacy_level, duet, stitch, comment, autoAddMusic, brand_content_toggle or brand_organic_toggle will be applied in UPLOAD mode - they are silently discarded. If the user asks for any of those settings, tell them it requires DIRECT_POST.',
     'video_made_with_ai, duet and stitch apply to video posts only. TikTok has no equivalent field for photo posts, so those settings are discarded when the attachment is a picture.',
+    'privacy_level has no default: TikTok requires the user to choose it explicitly, so always ask which audience the post is for (the allowed values come from the creatorInfo function). comment, duet and stitch are off unless the user turns them on. If disclose is true, at least one of brand_organic_toggle / brand_content_toggle must be true, and brand_content_toggle cannot be combined with privacy_level=SELF_ONLY.',
   ].join(' ')
 )
 export class TiktokProvider extends SocialAbstract implements SocialProvider {
@@ -419,10 +421,13 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
     };
   }
 
-  async maxVideoLength(accessToken: string) {
-    const {
-      data: { max_video_post_duration_sec },
-    } = await (
+  // TikTok's Content Sharing Guidelines require the posting UI to render the
+  // latest creator_info every time the "post to TikTok" form is shown: the
+  // creator's nickname, the privacy levels the account may use, and which of
+  // comment / duet / stitch the creator has disabled. The frontend calls this
+  // through POST /integrations/function { name: 'creatorInfo' }.
+  private async queryCreatorInfo(accessToken: string) {
+    const response = await (
       await fetch(
         'https://open.tiktokapis.com/v2/post/publish/creator_info/query/',
         {
@@ -435,8 +440,36 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
       )
     ).json();
 
+    const code = response?.error?.code ?? 'ok';
+    const data = response?.data ?? {};
+
     return {
-      maxDurationSeconds: max_video_post_duration_sec,
+      canPost: code === 'ok',
+      errorCode: code,
+      errorMessage: response?.error?.message ?? '',
+      nickname: data.creator_nickname ?? '',
+      username: data.creator_username ?? '',
+      avatarUrl: data.creator_avatar_url ?? '',
+      privacyLevelOptions: (data.privacy_level_options ?? []) as string[],
+      commentDisabled: !!data.comment_disabled,
+      duetDisabled: !!data.duet_disabled,
+      stitchDisabled: !!data.stitch_disabled,
+      maxVideoPostDurationSec: data.max_video_post_duration_sec ?? 0,
+    };
+  }
+
+  @DashboardFunction()
+  async creatorInfo(accessToken: string) {
+    return this.queryCreatorInfo(accessToken);
+  }
+
+  async maxVideoLength(accessToken: string) {
+    const { maxVideoPostDurationSec } = await this.queryCreatorInfo(
+      accessToken
+    );
+
+    return {
+      maxDurationSeconds: maxVideoPostDurationSec,
     };
   }
 
@@ -561,6 +594,43 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
     }
   }
 
+  // The same rules TikTokDto enforces in the composer, re-checked here so
+  // posts created through the public API or an agent cannot bypass them.
+  private assertDirectPostSettings(settings: TikTokDto) {
+    const fail = (message: string) =>
+      new BadBody(
+        'tiktok-error-upload',
+        JSON.stringify(settings),
+        Buffer.from(JSON.stringify(settings)),
+        message
+      );
+
+    if (!settings?.privacy_level) {
+      throw fail(
+        'TikTok requires you to choose who can see this post, there is no default audience'
+      );
+    }
+
+    const brandOrganic = this.assetBoolean(settings.brand_organic_toggle);
+    const brandContent = this.assetBoolean(settings.brand_content_toggle);
+
+    if (
+      this.assetBoolean(settings.disclose ?? false) &&
+      !brandOrganic &&
+      !brandContent
+    ) {
+      throw fail(
+        'You turned on the commercial content disclosure but did not choose "Your brand" or "Branded content"'
+      );
+    }
+
+    if (brandContent && settings.privacy_level === 'SELF_ONLY') {
+      throw fail(
+        'Branded content cannot be private on TikTok, choose a different audience'
+      );
+    }
+  }
+
   private buildTikokPostInfoBody(firstPost: PostDetails<TikTokDto>) {
     const isPhoto = !hasExtension(firstPost?.media?.[0]?.path, 'mp4');
     const method = this.contentPostingMethod(firstPost);
@@ -575,8 +645,9 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
             ? { title: firstPost.message }
             : {}),
           ...(isPhoto ? { description: firstPost.message } : {}),
-          privacy_level:
-            firstPost.settings.privacy_level || 'PUBLIC_TO_EVERYONE',
+          // No fallback on purpose: the guidelines forbid a default audience,
+          // postPending() refuses to publish without an explicit choice.
+          privacy_level: firstPost.settings.privacy_level,
           ...(isPhoto
             ? {}
             : { disable_duet: !this.assetBoolean(firstPost.settings.duet) }),
@@ -912,6 +983,33 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
     const [firstPost] = postDetails;
     const isPhoto = !hasExtension(firstPost?.media?.[0]?.path, 'mp4');
     const videoPath = firstPost?.media?.[0]?.path!;
+
+    if (this.contentPostingMethod(firstPost) === 'DIRECT_POST') {
+      this.assertDirectPostSettings(firstPost.settings);
+
+      // Guideline: check creator_info right before publishing and stop when
+      // the creator cannot post (spam risk, too many pending posts, ...).
+      const creator = await this.queryCreatorInfo(accessToken);
+      if (!creator.canPost) {
+        throw new BadBody(
+          'tiktok-error-upload',
+          JSON.stringify(creator),
+          Buffer.from(JSON.stringify(creator)),
+          `TikTok reports this account cannot post right now (${creator.errorCode}), please try again later`
+        );
+      }
+      if (
+        creator.privacyLevelOptions.length &&
+        !creator.privacyLevelOptions.includes(firstPost.settings.privacy_level)
+      ) {
+        throw new BadBody(
+          'tiktok-error-upload',
+          JSON.stringify(creator),
+          Buffer.from(JSON.stringify(creator)),
+          `The audience "${firstPost.settings.privacy_level}" is not available for this TikTok account, pick one of: ${creator.privacyLevelOptions.join(', ')}`
+        );
+      }
+    }
 
     // For videos we only need the total size up front (HEAD / statSync) so we
     // can init the upload; the bytes themselves are streamed later, never fully

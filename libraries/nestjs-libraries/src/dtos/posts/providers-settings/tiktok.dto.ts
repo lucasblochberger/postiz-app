@@ -1,5 +1,18 @@
 import {
-  IsBoolean, ValidateIf, IsIn, IsString, MaxLength, IsOptional, IsDefined, IsNumber, Min, Max, ValidateNested
+  IsBoolean,
+  ValidateIf,
+  IsIn,
+  IsString,
+  MaxLength,
+  IsOptional,
+  IsDefined,
+  IsNumber,
+  Min,
+  Max,
+  ValidateNested,
+  registerDecorator,
+  ValidationArguments,
+  ValidationOptions,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JSONSchema } from 'class-validator-jsonschema';
@@ -58,6 +71,49 @@ export class TikTokLocation {
   address?: string;
 }
 
+// TikTok Content Sharing Guidelines: when the commercial content disclosure
+// is switched on, the user must pick "Your brand" and/or "Branded content"
+// before the post can be published.
+function TikTokDisclosureNeedsOption(options?: ValidationOptions) {
+  return (object: object, propertyName: string) =>
+    registerDecorator({
+      name: 'tikTokDisclosureNeedsOption',
+      target: object.constructor,
+      propertyName,
+      options,
+      validator: {
+        validate(value: unknown, args: ValidationArguments) {
+          const dto = args.object as TikTokDto;
+          if (dto.content_posting_method === 'UPLOAD' || !value) {
+            return true;
+          }
+          return !!(dto.brand_organic_toggle || dto.brand_content_toggle);
+        },
+      },
+    });
+}
+
+// TikTok Content Sharing Guidelines: branded content can never be private,
+// so "Branded content" + SELF_ONLY must not reach the publish step.
+function TikTokBrandedContentNotPrivate(options?: ValidationOptions) {
+  return (object: object, propertyName: string) =>
+    registerDecorator({
+      name: 'tikTokBrandedContentNotPrivate',
+      target: object.constructor,
+      propertyName,
+      options,
+      validator: {
+        validate(value: unknown, args: ValidationArguments) {
+          const dto = args.object as TikTokDto;
+          if (dto.content_posting_method === 'UPLOAD' || !value) {
+            return true;
+          }
+          return dto.privacy_level !== 'SELF_ONLY';
+        },
+      },
+    });
+}
+
 // TikTok only honors most of these settings on a DIRECT_POST. With
 // content_posting_method=UPLOAD the media lands in the user's TikTok inbox as a
 // draft, and TikTok's inbox/upload endpoints accept nothing but the title /
@@ -77,16 +133,22 @@ export class TikTokDto {
   })
   title: string;
 
-  @IsIn([
-    'PUBLIC_TO_EVERYONE',
-    'MUTUAL_FOLLOW_FRIENDS',
-    'FOLLOWER_OF_CREATOR',
-    'SELF_ONLY',
-  ])
+  // No default any more, and the field is hidden in UPLOAD mode (TikTok ignores
+  // it there), so it is only required for DIRECT_POST.
+  @ValidateIf((p) => p.content_posting_method !== 'UPLOAD')
+  @IsIn(
+    [
+      'PUBLIC_TO_EVERYONE',
+      'MUTUAL_FOLLOW_FRIENDS',
+      'FOLLOWER_OF_CREATOR',
+      'SELF_ONLY',
+    ],
+    { message: 'Please choose who can see this post' }
+  )
   @IsString()
   @JSONSchema({
     description:
-      'Applied only when content_posting_method=DIRECT_POST. Ignored by TikTok on UPLOAD.',
+      'Required, no default: TikTok requires the user to pick the audience explicitly. Only the values returned by the creatorInfo function (privacy_level_options) are accepted for the account. Applied only when content_posting_method=DIRECT_POST. Ignored by TikTok on UPLOAD.',
   })
   privacy_level:
     | 'PUBLIC_TO_EVERYONE'
@@ -124,10 +186,25 @@ export class TikTokDto {
   })
   autoAddMusic: 'yes' | 'no';
 
+  @ValidateIf((p) => p.disclose === true)
   @IsBoolean()
+  @TikTokDisclosureNeedsOption({
+    message:
+      'You need to indicate if your content promotes yourself, a third party, or both.',
+  })
   @JSONSchema({
     description:
-      'Applied only when content_posting_method=DIRECT_POST. Ignored by TikTok on UPLOAD.',
+      'Commercial content disclosure switch. Off by default. When true, at least one of brand_organic_toggle / brand_content_toggle must be true. Applied only when content_posting_method=DIRECT_POST.',
+  })
+  disclose?: boolean;
+
+  @IsBoolean()
+  @TikTokBrandedContentNotPrivate({
+    message: 'Branded content cannot be private, choose a different audience',
+  })
+  @JSONSchema({
+    description:
+      'Marks the post as paid partnership ("Branded content"). Cannot be combined with privacy_level=SELF_ONLY. Applied only when content_posting_method=DIRECT_POST. Ignored by TikTok on UPLOAD.',
   })
   brand_content_toggle: boolean;
 
