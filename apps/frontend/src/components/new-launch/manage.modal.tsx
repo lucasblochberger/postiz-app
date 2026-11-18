@@ -617,6 +617,14 @@ export const ManageModal: FC<AddEditModalProps> = (props) => {
                 className="group cursor-pointer relative"
                 title={submitBlock || undefined}
               >
+                {!!submitBlock && (
+                  <div
+                    role="tooltip"
+                    className="hidden group-hover:block absolute bottom-[calc(100%+8px)] end-0 z-[300] w-[280px] rounded-[8px] bg-black text-white text-[13px] leading-[18px] p-[10px] shadow-lg"
+                  >
+                    {submitBlock}
+                  </div>
+                )}
                 <button
                   disabled={
                     selectedIntegrations.length === 0 ||
@@ -625,7 +633,10 @@ export const ManageModal: FC<AddEditModalProps> = (props) => {
                     !!submitBlock
                   }
                   onClick={schedule('schedule')}
-                  className="text-white relative min-w-[180px] btnSub disabled:cursor-not-allowed disabled:opacity-80 outline-none gap-[8px] flex justify-center items-center h-[44px] rounded-[8px] bg-[#612BD3] ps-[20px] pe-[16px]"
+                  className={clsx(
+                    'text-white relative min-w-[180px] btnSub disabled:cursor-not-allowed disabled:opacity-80 outline-none gap-[8px] flex justify-center items-center h-[44px] rounded-[8px] bg-[#612BD3] ps-[20px] pe-[16px]',
+                    !!submitBlock && '!opacity-40 grayscale'
+                  )}
                 >
                   {loading && (
                     <div className="absolute left-[50%] top-[50%] -translate-y-[50%] -translate-x-[50%]">
@@ -664,7 +675,10 @@ export const ManageModal: FC<AddEditModalProps> = (props) => {
                       locked ||
                       !!submitBlock
                     }
-                    className="rounded-[8px] z-[300] disabled:cursor-not-allowed disabled:opacity-80 hidden group-hover:flex absolute bottom-[100%] -left-[12px] p-[12px] w-[206px] bg-newBgColorInner"
+                    className={clsx(
+                      'rounded-[8px] z-[300] disabled:cursor-not-allowed disabled:opacity-80 hidden absolute bottom-[100%] -left-[12px] p-[12px] w-[206px] bg-newBgColorInner',
+                      !submitBlock && 'group-hover:flex'
+                    )}
                   >
                     <div className="text-white rounded-[8px] bg-[#D82D7E] h-[44px] w-full flex justify-center items-center post-now">
                       {t('post_now', 'Post Now')}

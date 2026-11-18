@@ -312,8 +312,11 @@ const TikTokSettings: FC<{
                 value={item.value}
                 disabled={blocked}
                 title={blocked ? brandedNotPrivateHint : undefined}
+                style={blocked ? { color: '#7a7a7a' } : undefined}
               >
-                {item.label}
+                {blocked
+                  ? `${item.label} (${brandedNotPrivateHint})`
+                  : item.label}
               </option>
             );
           })}
