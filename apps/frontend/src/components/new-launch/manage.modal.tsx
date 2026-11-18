@@ -69,6 +69,7 @@ export const ManageModal: FC<AddEditModalProps> = (props) => {
     integrations,
     setSelectedIntegrations,
     locked,
+    submitBlocks,
     current,
     activateExitButton,
     setHide,
@@ -87,9 +88,12 @@ export const ManageModal: FC<AddEditModalProps> = (props) => {
       integrations: state.integrations,
       setSelectedIntegrations: state.setSelectedIntegrations,
       locked: state.locked,
+      submitBlocks: state.submitBlocks,
       activateExitButton: state.activateExitButton,
     }))
   );
+
+  const submitBlock = Object.values(submitBlocks || {})[0] || '';
 
   useEffect(() => {
     if (hide) {
@@ -609,10 +613,16 @@ export const ManageModal: FC<AddEditModalProps> = (props) => {
               </button>
             )}
             {!addEditSets && (
-              <div className="group cursor-pointer relative">
+              <div
+                className="group cursor-pointer relative"
+                title={submitBlock || undefined}
+              >
                 <button
                   disabled={
-                    selectedIntegrations.length === 0 || loading || locked
+                    selectedIntegrations.length === 0 ||
+                    loading ||
+                    locked ||
+                    !!submitBlock
                   }
                   onClick={schedule('schedule')}
                   className="text-white relative min-w-[180px] btnSub disabled:cursor-not-allowed disabled:opacity-80 outline-none gap-[8px] flex justify-center items-center h-[44px] rounded-[8px] bg-[#612BD3] ps-[20px] pe-[16px]"
@@ -649,7 +659,10 @@ export const ManageModal: FC<AddEditModalProps> = (props) => {
                   <button
                     onClick={schedule('now')}
                     disabled={
-                      selectedIntegrations.length === 0 || loading || locked
+                      selectedIntegrations.length === 0 ||
+                      loading ||
+                      locked ||
+                      !!submitBlock
                     }
                     className="rounded-[8px] z-[300] disabled:cursor-not-allowed disabled:opacity-80 hidden group-hover:flex absolute bottom-[100%] -left-[12px] p-[12px] w-[206px] bg-newBgColorInner"
                   >
