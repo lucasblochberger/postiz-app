@@ -15,7 +15,6 @@ import {
 } from '@gitroom/nestjs-libraries/integrations/social.abstract';
 import { TikTokDto } from '@gitroom/nestjs-libraries/dtos/posts/providers-settings/tiktok.dto';
 import { timer } from '@gitroom/helpers/utils/timer';
-import { setHeartbeatDetails } from '@gitroom/nestjs-libraries/temporal/temporal.heartbeat';
 import { hasExtension } from '@gitroom/helpers/utils/has.extension';
 import { createReadStream } from 'fs';
 import { getSsrfSafeDispatcher } from '@gitroom/nestjs-libraries/dtos/webhooks/ssrf.safe.dispatcher';
@@ -758,9 +757,14 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
   // read stream for local files.
   private async tiktokChunkStream(path: string, start: number, end: number) {
     if (path.indexOf('http') === 0) {
+      const controller = new AbortController();
       const response = await fetch(path, {
-        headers: { Range: `bytes=${start}-${end}` },
+        headers: {
+          Range: `bytes=${start}-${end}`,
+          'accept-encoding': 'identity',
+        },
         dispatcher: getSsrfSafeDispatcher(),
+        signal: controller.signal,
       } as any);
 
       // A store that ignores Range (200 with the full file) or answers with an
@@ -774,10 +778,11 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
         );
       }
 
-      return response.body;
+      return { body: response.body, release: () => controller.abort() };
     }
 
-    return createReadStream(path, { start, end });
+    const stream = createReadStream(path, { start, end });
+    return { body: stream, release: () => stream.destroy() };
   }
 
   // Streams the video bytes to the upload_url returned by the init call.
@@ -819,9 +824,7 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
     contentType: string,
     totalRetries = 0
   ): Promise<void> {
-    const body = await this.tiktokChunkStream(path, start, end);
-
-    setHeartbeatDetails(`tiktok: upload chunk ${start}-${end}`);
+    const { body, release } = await this.tiktokChunkStream(path, start, end);
 
     const upload = await fetch(uploadUrl, {
       method: 'PUT',
@@ -833,7 +836,10 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
       body,
       // Required by undici when streaming a request body.
       duplex: 'half',
-    } as any);
+    } as any).catch((err) => {
+      release();
+      throw err;
+    });
 
     if (
       upload.status === 200 ||
@@ -843,6 +849,8 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
       return;
     }
 
+    // TikTok can answer before reading the whole chunk
+    release();
     const text = await upload.text().catch(() => '{}');
 
     if (
@@ -866,7 +874,8 @@ export class TiktokProvider extends SocialAbstract implements SocialProvider {
       'tiktok-error-upload',
       text,
       Buffer.from(text),
-      handleError?.value || 'Failed to upload the video to TikTok'
+      handleError?.value ||
+        `Failed to upload the video to TikTok (chunk ${start}-${end}/${videoSize}, HTTP ${upload.status}): ${text.slice(0, 300)}`
     );
   }
 
