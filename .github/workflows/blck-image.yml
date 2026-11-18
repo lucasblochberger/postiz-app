@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - blck/tiktok-audit
+      - blck/tiktok-audit-v2.23
 
 permissions:
   contents: read
@@ -35,8 +35,8 @@ jobs:
           IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/postiz-blck
           docker buildx build --platform linux/amd64 \
             -f Dockerfile.dev \
-            -t $IMAGE:tiktok-audit \
-            -t $IMAGE:tiktok-audit-${GITHUB_SHA::7} \
-            --build-arg NEXT_PUBLIC_VERSION=v2.26.0-blck \
+            -t $IMAGE:tiktok-audit-v2.23 \
+            -t $IMAGE:tiktok-audit-v2.23-${GITHUB_SHA::7} \
+            --build-arg NEXT_PUBLIC_VERSION=v2.23.0-blck \
             --provenance=false --sbom=false \
             --push .
